@@ -34,6 +34,12 @@ class Backup extends IPSModule
         $this->RegisterPropertyString('FilterDirectory', '');
         $this->RegisterPropertyInteger('SizeLimit', 20);
 
+        //Retention
+        $this->RegisterPropertyBoolean('EnableRetention', false);
+        $this->RegisterPropertyInteger('RetentionDays', 30);
+        $this->RegisterPropertyString('RetentionUnit', 'Days');
+        $this->RegisterPropertyString('ProtectedBackups', '[]');
+
         if (!IPS_VariableProfileExists('Megabytes.Backup')) {
             //Profil erstellen
             IPS_CreateVariableProfile('Megabytes.Backup', VARIABLETYPE_FLOAT);
@@ -82,6 +88,7 @@ class Backup extends IPSModule
         $json = json_decode(file_get_contents(__DIR__ . '/form.json', true), true);
         $json['elements'][5]['visible'] = $this->ReadPropertyBoolean('EnableTimer');
         $json['elements'][2]['items'][1]['visible'] = $this->ReadPropertyString('Mode') == 'IncrementalBackup';
+        $json['elements'][6]['items'][3]['visible'] = $this->ReadPropertyBoolean('EnableRetention');
         return json_encode($json);
     }
 
@@ -210,6 +217,9 @@ class Backup extends IPSModule
                 }
             }
 
+            // Delete backups older than the configured retention period (protected ones are kept)
+            $this->cleanupOldBackups($connection, $baseDir);
+
             $connection->disconnect();
             $this->UpdateFormField('Progress', 'indeterminate', true);
             $this->UpdateFormField('Progress', 'visible', false);
@@ -228,6 +238,73 @@ class Backup extends IPSModule
     public function UIEnableTimer(bool $value)
     {
         $this->UpdateFormField('DailyUpdateTime', 'visible', $value);
+    }
+
+    public function UIEnableRetention(bool $value)
+    {
+        $this->UpdateFormField('RetentionDaysRow', 'visible', $value);
+    }
+
+    // Reuses the same directory browser as "Select Directory" for the target dir (UISelectDir/UIGoDeeper/
+    // UILoadDir/UIAssumeDir), but starts at the configured target directory and adds the chosen backup
+    // directory to the protected list instead of overwriting the target directory field.
+    public function UISelectProtectedDir(string $host, int $port, string $username, string $password, string $connectionType)
+    {
+        $start = $this->ReadPropertyString('TargetDir');
+        $this->UIGoDeeperProtected($start != '' ? $start : '/', $host, $port, $username, $password, $connectionType);
+    }
+
+    public function UIGoDeeperProtected(string $value, string $host, int $port, string $username, string $password, string $connectionType)
+    {
+        $connection = $this->createConnectionEx($host, $port, $username, $password, $connectionType, true);
+        if ($connection === false) {
+            return;
+        }
+        $connection->chdir($value);
+        $this->UILoadDirProtected($connection->pwd(), $host, $port, $username, $password, $connectionType);
+        $this->UpdateFormField('ProtectedCurrentDir', 'value', $connection->pwd());
+        $connection->disconnect();
+    }
+
+    public function UILoadDirProtected(string $dir, string $host, int $port, string $username, string $password, string $connectionType)
+    {
+        $connection = $this->createConnectionEx($host, $port, $username, $password, $connectionType, true);
+        if ($connection === false) {
+            return;
+        }
+        $dirs = $this->buildDirectoryEntries($connection, $dir);
+        $this->UpdateFormField('ProtectedSelectDirectory', 'values', json_encode($dirs));
+        $connection->disconnect();
+    }
+
+    public function UIAddProtectedDir(string $value, string $host, int $port, string $username, string $password, string $connectionType)
+    {
+        $connection = $this->createConnectionEx($host, $port, $username, $password, $connectionType, true);
+        if ($connection === false) {
+            return;
+        }
+        $connection->chdir($value);
+        $absolute = $connection->pwd();
+        $connection->disconnect();
+
+        // Retention only compares the top level directory name below the target directory
+        $baseDir = $this->ReadPropertyString('TargetDir');
+        $relative = $absolute;
+        if ($baseDir != '' && strpos($absolute, $baseDir) === 0) {
+            $relative = ltrim(substr($absolute, strlen($baseDir)), '/');
+        }
+        $name = explode('/', ltrim($relative, '/'))[0];
+        if ($name == '') {
+            echo $this->Translate('Please select a backup directory below the target directory');
+            return;
+        }
+
+        $protected = json_decode($this->ReadPropertyString('ProtectedBackups'), true);
+        $protected = is_array($protected) ? $protected : [];
+        if (!in_array($name, array_column($protected, 'Directory'), true)) {
+            array_push($protected, ['Directory' => $name]);
+        }
+        $this->UpdateFormField('ProtectedBackups', 'values', json_encode($protected));
     }
 
     public function UIEnableChange(string $mode)
@@ -283,25 +360,7 @@ class Backup extends IPSModule
         if ($connection === false) {
             return;
         }
-        $dirs = [];
-        //Initial is '..' to handle a go up if $dir != '/'
-        if ($dir != '' && $dir != '/') {
-            array_push($dirs, [
-                'SelectedDirectory' => '..',
-                'DeeperDir'         => '⬑',
-            ]);
-        }
-        $list = $connection->rawlist($dir);
-        foreach ($list as $entry) {
-            if ($entry['type'] == 2 &&
-                ($entry['filename'] != '.' && $entry['filename'] != '..')
-            ) {
-                array_push($dirs, [
-                    'SelectedDirectory' => $entry['filename'],
-                    'DeeperDir'         => '↳'
-                ]);
-            }
-        }
+        $dirs = $this->buildDirectoryEntries($connection, $dir);
         $this->UpdateFormField('SelectTargetDirectory', 'values', json_encode($dirs));
         //If the root directory is empty
         if ($dirs == []) {
@@ -340,6 +399,30 @@ class Backup extends IPSModule
             $this->UpdateFormField('Progress', 'visible', false);
             $connection->disconnect();
         }
+    }
+
+    private function buildDirectoryEntries($connection, string $dir): array
+    {
+        $dirs = [];
+        //Initial is '..' to handle a go up if $dir != '/'
+        if ($dir != '' && $dir != '/') {
+            array_push($dirs, [
+                'SelectedDirectory' => '..',
+                'DeeperDir'         => '⬑',
+            ]);
+        }
+        $list = $connection->rawlist($dir);
+        foreach ($list as $entry) {
+            if ($entry['type'] == 2 &&
+                ($entry['filename'] != '.' && $entry['filename'] != '..')
+            ) {
+                array_push($dirs, [
+                    'SelectedDirectory' => $entry['filename'],
+                    'DeeperDir'         => '↳'
+                ]);
+            }
+        }
+        return $dirs;
     }
 
     private function getDeletableFiles($connection, $remoteDir, $localDir)
@@ -612,6 +695,94 @@ class Backup extends IPSModule
 
         //File is passing
         return false;
+    }
+
+    private function cleanupOldBackups($connection, string $baseDir)
+    {
+        if (!$this->ReadPropertyBoolean('EnableRetention')) {
+            return;
+        }
+
+        $protected = json_decode($this->ReadPropertyString('ProtectedBackups'), true);
+        $protected = is_array($protected) ? array_column($protected, 'Directory') : [];
+
+        // "Minutes" only exists to make testing the retention logic fast; the logic itself
+        // is identical, just with a different unit factor.
+        $unitInSeconds = $this->ReadPropertyString('RetentionUnit') == 'Minutes' ? 60 : 86400;
+        $threshold = time() - ($this->ReadPropertyInteger('RetentionDays') * $unitInSeconds);
+
+        try {
+            // Retention only applies to the top level backup directories directly below the target directory
+            if ($baseDir != '') {
+                $connection->chdir($baseDir);
+            } else {
+                $connection->chdir('/');
+            }
+            $list = $connection->rawlist($connection->pwd());
+        } catch (\Throwable $th) {
+            $this->SendDebug('Retention', 'Unable to list backups for cleanup: ' . $th->getMessage(), 0);
+            return;
+        }
+
+        foreach ($list as $entry) {
+            $name = $entry['filename'];
+            if ($name == '.' || $name == '..') {
+                continue;
+            }
+            // Only touch directories created by this module, never foreign data in the target directory
+            if (strpos($name, 'symcon-backup') !== 0) {
+                continue;
+            }
+            if (!$connection->is_dir($name)) {
+                continue;
+            }
+            if (in_array($name, $protected, true)) {
+                continue;
+            }
+
+            $mtime = $entry['mtime'] ?? null;
+            if ($mtime === null) {
+                try {
+                    $mtime = $connection->filemtime($name);
+                } catch (\Throwable $th) {
+                    // If we cannot determine the age, better keep the backup than delete it accidentally
+                    continue;
+                }
+            }
+
+            if ($mtime < $threshold) {
+                try {
+                    $this->deleteRemoteDirectoryRecursive($connection, $name);
+                    $this->SendDebug('Retention', sprintf('Deleted backup "%s" as it is older than %d %s', $name, $this->ReadPropertyInteger('RetentionDays'), $this->ReadPropertyString('RetentionUnit')), 0);
+                } catch (\Throwable $th) {
+                    $this->SendDebug('Retention', sprintf('Failed to delete backup "%s": %s', $name, $th->getMessage()), 0);
+                }
+            }
+        }
+    }
+
+    private function deleteRemoteDirectoryRecursive($connection, string $path)
+    {
+        $connection->chdir($path);
+        $list = $connection->rawlist($connection->pwd());
+        foreach ($list as $entry) {
+            $name = $entry['filename'];
+            if ($name == '.' || $name == '..') {
+                continue;
+            }
+            if ($connection->is_dir($name)) {
+                $this->deleteRemoteDirectoryRecursive($connection, $name);
+            } else {
+                if ($connection->delete($name) === false) {
+                    throw new \Exception('Could not delete file ' . $connection->pwd() . '/' . $name);
+                }
+            }
+        }
+        $connection->chdir('..');
+        // phpseclib reports failures by returning false instead of throwing
+        if ($connection->rmdir($path) === false) {
+            throw new \Exception('Could not remove directory ' . $connection->pwd() . '/' . $path);
+        }
     }
 
     private function createConnection()

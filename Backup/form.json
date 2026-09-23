@@ -203,6 +203,119 @@
                             }
                         }
                     ]
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "EnableRetention",
+                    "caption": "Automatically delete old backups",
+                    "onChange": "SB_UIEnableRetention($id, $EnableRetention);"
+                },
+                {
+                    "type": "RowLayout",
+                    "name": "RetentionDaysRow",
+                    "visible": false,
+                    "items": [
+                        {
+                            "type": "NumberSpinner",
+                            "name": "RetentionDays",
+                            "caption": "Keep backups for",
+                            "minimum": 1
+                        },
+                        {
+                            "type": "Select",
+                            "name": "RetentionUnit",
+                            "caption": "Unit",
+                            "options": [
+                                {
+                                    "caption": "Days",
+                                    "value": "Days"
+                                },
+                                {
+                                    "caption": "Minutes (for testing)",
+                                    "value": "Minutes"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "type": "RowLayout",
+                    "items": [
+                        {
+                            "type": "List",
+                            "name": "ProtectedBackups",
+                            "caption": "Protected backups (never deleted automatically)",
+                            "add": true,
+                            "delete": true,
+                            "columns": [
+                                {
+                                    "caption": "Backup Directory",
+                                    "name": "Directory",
+                                    "width": "auto",
+                                    "add": "",
+                                    "edit": {
+                                        "type": "ValidationTextBox"
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            "type": "PopupButton",
+                            "caption": "Select Directory",
+                            "onClick": "SB_UISelectProtectedDir($id, $Host, $Port, $Username, $Password, $ConnectionType);",
+                            "popup": {
+                                "buttons": [
+                                    {
+                                        "type": "Button",
+                                        "caption": "Protect",
+                                        "onClick": [
+                                            "SB_UIAddProtectedDir(",
+                                            "$id, ",
+                                            "isset($ProtectedSelectDirectory['SelectedDirectory']) ? $ProtectedCurrentDir.'/'.$ProtectedSelectDirectory['SelectedDirectory'] : $ProtectedCurrentDir,",
+                                            "$Host,",
+                                            "$Port, ",
+                                            "$Username,",
+                                            "$Password,",
+                                            "$ConnectionType",
+                                            ");"
+                                        ]
+                                    }
+                                ],
+                                "items": [
+                                    {
+                                        "type": "ValidationTextBox",
+                                        "name": "ProtectedCurrentDir",
+                                        "caption": "Current Directory",
+                                        "value": "",
+                                        "enabled": false
+                                    },
+                                    {
+                                        "type": "List",
+                                        "name": "ProtectedSelectDirectory",
+                                        "caption": "Select Backup Directory",
+                                        "columns": [
+                                            {
+                                                "caption": "Directory",
+                                                "name": "SelectedDirectory",
+                                                "width": "auto",
+                                                "add": 0,
+                                                "confirm": "Go into this Directory?"
+                                            },
+                                            {
+                                                "onClick": "SB_UIGoDeeperProtected($id,$ProtectedCurrentDir.'/'.$ProtectedSelectDirectory['SelectedDirectory'],$Host, $Port, $Username, $Password, $ConnectionType);",
+                                                "caption": "Go into",
+                                                "name": "DeeperDir",
+                                                "width": "75px",
+                                                "add": 0
+                                            }
+                                        ],
+                                        "values": []
+                                    }
+                                ],
+                                "caption": "Select the backup directory to protect"
+                            }
+                        }
+                    ]
                 }
             ]
         }

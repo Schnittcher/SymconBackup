@@ -57,10 +57,15 @@ class FTP
             $mode = str_replace('x', '1', $mode);
             $mode = bindec($type . '000' . $mode);
 
+            // $info[5..7] is either "Mon DD HH:MM" (current year) or "Mon DD YYYY".
+            // strtotime handles both formats natively.
+            $mtime = strtotime($info[5] . ' ' . $info[6] . ' ' . $info[7]);
+
             array_push($dump, [
                 'size'     => $info[4],
                 'mode'     => $mode,
                 'type'     => $type == '0100' ? 2 : 1,
+                'mtime'    => $mtime !== false ? $mtime : null,
                 'filename' => $info[8],
             ]);
         }
@@ -108,6 +113,15 @@ class FTP
             }
             return $result;
         }
+    }
+
+    public function rmdir(string $dir): bool
+    {
+        $result = @ftp_rmdir($this->connection, $dir);
+        if ($result === false) {
+            throw new Exception(error_get_last()['message']);
+        }
+        return $result;
     }
 
     public function put(string $remote_file, string $data): bool
