@@ -718,7 +718,8 @@ class Backup extends IPSModule
             } else {
                 $connection->chdir('/');
             }
-            $list = $connection->rawlist($connection->pwd());
+            $backupRoot = $connection->pwd();
+            $list = $connection->rawlist($backupRoot);
         } catch (\Throwable $th) {
             $this->SendDebug('Retention', 'Unable to list backups for cleanup: ' . $th->getMessage(), 0);
             return;
@@ -756,6 +757,12 @@ class Backup extends IPSModule
                     $this->SendDebug('Retention', sprintf('Deleted backup "%s" as it is older than %d %s', $name, $this->ReadPropertyInteger('RetentionDays'), $this->ReadPropertyString('RetentionUnit')), 0);
                 } catch (\Throwable $th) {
                     $this->SendDebug('Retention', sprintf('Failed to delete backup "%s": %s', $name, $th->getMessage()), 0);
+                    // A failed delete leaves the connection inside the sub directory. Go back so the remaining backups are still handled.
+                    try {
+                        $connection->chdir($backupRoot);
+                    } catch (\Throwable $th) {
+                        return;
+                    }
                 }
             }
         }
